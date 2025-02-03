@@ -9,7 +9,7 @@ import {
 } from '@parcel/test-utils';
 import commandExists from 'command-exists';
 
-describe.skip('rust', function() {
+describe.skip('rust', function () {
   if (typeof WebAssembly === 'undefined' || !commandExists.sync('rustup')) {
     // eslint-disable-next-line no-console
     console.log(
@@ -18,18 +18,13 @@ describe.skip('rust', function() {
     return;
   }
 
-  it('should generate a wasm file from a rust file with rustc with --target=browser', async function() {
+  it('should generate a wasm file from a rust file with rustc with --target=browser', async function () {
     this.timeout(500000);
     let b = await bundle(path.join(__dirname, '/integration/rust/index.js'));
 
     await assertBundleTree(b, {
       name: 'index.js',
-      assets: [
-        'bundle-loader.js',
-        'bundle-url.js',
-        'index.js',
-        'wasm-loader.js',
-      ],
+      assets: ['bundle-loader.js', 'index.js', 'wasm-loader.js'],
       childBundles: [
         {
           type: 'wasm',
@@ -51,7 +46,7 @@ describe.skip('rust', function() {
     );
   });
 
-  it('should generate a wasm file from a rust file with rustc with --target=node', async function() {
+  it('should generate a wasm file from a rust file with rustc with --target=node', async function () {
     this.timeout(500000);
     let b = await bundle(path.join(__dirname, '/integration/rust/index.js'), {
       target: 'node',
@@ -59,12 +54,7 @@ describe.skip('rust', function() {
 
     await assertBundleTree(b, {
       name: 'index.js',
-      assets: [
-        'bundle-loader.js',
-        'bundle-url.js',
-        'index.js',
-        'wasm-loader.js',
-      ],
+      assets: ['bundle-loader.js', 'index.js', 'wasm-loader.js'],
       childBundles: [
         {
           type: 'wasm',
@@ -86,19 +76,14 @@ describe.skip('rust', function() {
     );
   });
 
-  it('should support rust files with dependencies via rustc', async function() {
+  it('should support rust files with dependencies via rustc', async function () {
     this.timeout(500000);
     let b = bundler(path.join(__dirname, '/integration/rust-deps/index.js'));
     let bundle = await b.bundle();
 
     await assertBundleTree(bundle, {
       name: 'index.js',
-      assets: [
-        'bundle-loader.js',
-        'bundle-url.js',
-        'index.js',
-        'wasm-loader.js',
-      ],
+      assets: ['bundle-loader.js', 'index.js', 'wasm-loader.js'],
       childBundles: [
         {
           type: 'map',
@@ -115,7 +100,7 @@ describe.skip('rust', function() {
     assert.equal(res, 10);
   });
 
-  it('should generate a wasm file from a rust file with cargo', async function() {
+  it('should generate a wasm file from a rust file with cargo', async function () {
     this.timeout(500000);
     let b = await bundle(
       path.join(__dirname, '/integration/rust-cargo/src/index.js'),
@@ -123,12 +108,7 @@ describe.skip('rust', function() {
 
     await assertBundleTree(b, {
       name: 'index.js',
-      assets: [
-        'bundle-loader.js',
-        'bundle-url.js',
-        'index.js',
-        'wasm-loader.js',
-      ],
+      assets: ['bundle-loader.js', 'index.js', 'wasm-loader.js'],
       childBundles: [
         {
           type: 'map',
@@ -145,7 +125,7 @@ describe.skip('rust', function() {
     assert.equal(res, 5);
   });
 
-  it('should generate a wasm file from a rust file in cargo workspace', async function() {
+  it('should generate a wasm file from a rust file in cargo workspace', async function () {
     this.timeout(500000);
     let b = await bundle(
       path.join(
@@ -156,12 +136,7 @@ describe.skip('rust', function() {
 
     await assertBundleTree(b, {
       name: 'index.js',
-      assets: [
-        'bundle-loader.js',
-        'bundle-url.js',
-        'index.js',
-        'wasm-loader.js',
-      ],
+      assets: ['bundle-loader.js', 'index.js', 'wasm-loader.js'],
       childBundles: [
         {
           type: 'map',

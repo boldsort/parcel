@@ -10,6 +10,8 @@ import {
   overlayFS,
   sleep,
   run,
+  request,
+  distDir,
 } from '@parcel/test-utils';
 import WebSocket from 'ws';
 import json5 from 'json5';
@@ -17,6 +19,9 @@ import getPort from 'get-port';
 // flowlint-next-line untyped-import:off
 import JSDOM from 'jsdom';
 import nullthrows from 'nullthrows';
+import {pathToFileURL} from 'url';
+import {normalizeSeparators} from '@parcel/utils';
+import SourceMap from '@parcel/source-map';
 
 const config = path.join(
   __dirname,
@@ -45,7 +50,7 @@ async function nextWSMessage(ws: WebSocket) {
   return json5.parse(await new Promise(resolve => ws.once('message', resolve)));
 }
 
-describe('hmr', function() {
+describe('hmr', function () {
   let subscription, ws;
 
   async function testHMRClient(
@@ -79,9 +84,16 @@ describe('hmr', function() {
     ws = await openSocket('ws://localhost:' + port);
 
     let outputs = [];
+    let reloaded = false;
     await run(bundleGraph, {
       output(o) {
         outputs.push(o);
+      },
+      location: {
+        reload() {
+          reloaded = true;
+          outputs = [];
+        },
       },
     });
 
@@ -94,13 +106,17 @@ describe('hmr', function() {
           fsUpdates[f],
         );
       }
+
+      await nextWSMessage(nullthrows(ws));
+      await sleep(100);
     }
 
-    await nextWSMessage(nullthrows(ws));
-    await sleep(100);
-
     // Fixup the prototypes so that strict assertions work
-    return JSON.parse(JSON.stringify(outputs));
+    return {
+      outputs: JSON.parse(JSON.stringify(outputs)),
+      reloaded,
+      bundleGraph,
+    };
   }
 
   afterEach(async () => {
@@ -116,7 +132,7 @@ describe('hmr', function() {
   });
 
   describe('hmr server', () => {
-    beforeEach(async function() {
+    beforeEach(async function () {
       await outputFS.rimraf(path.join(__dirname, '/input'));
       await ncp(
         path.join(__dirname, '/integration/commonjs'),
@@ -124,7 +140,7 @@ describe('hmr', function() {
       );
     });
 
-    it('should emit an HMR update for the file that changed', async function() {
+    it('should emit an HMR update for the file that changed', async function () {
       let port = await getPort();
       let b = bundler(path.join(__dirname, '/input/index.js'), {
         hmrOptions: {port},
@@ -147,13 +163,15 @@ describe('hmr', function() {
       assert.equal(message.type, 'update');
 
       // Figure out why output doesn't change...
-      let localAsset = message.assets.find(
-        asset => asset.output === 'exports.a = 5;\nexports.b = 5;\n',
+      let localAsset = message.assets.find(asset =>
+        asset.output.includes('exports.a = 5;\nexports.b = 5;\n'),
       );
       assert(!!localAsset);
+      assert(localAsset.output.includes('//# sourceMappingURL'));
+      assert(localAsset.output.includes('//# sourceURL'));
     });
 
-    it('should emit an HMR update for all new dependencies along with the changed file', async function() {
+    it('should emit an HMR update for all new dependencies along with the changed file', async function () {
       let port = await getPort();
       let b = bundler(path.join(__dirname, '/input/index.js'), {
         hmrOptions: {port},
@@ -175,10 +193,10 @@ describe('hmr', function() {
 
       assert.equal(message.type, 'update');
 
-      assert.equal(message.assets.length, 2);
+      assert.equal(message.assets.length, 1);
     });
 
-    it('should emit an HMR error on bundle failure', async function() {
+    it('should emit an HMR error on bundle failure', async function () {
       let port = await getPort();
       let b = bundler(path.join(__dirname, '/input/index.js'), {
         hmrOptions: {port},
@@ -205,7 +223,7 @@ describe('hmr', function() {
       assert(!!message.diagnostics.ansi, 'Should contain an ansi diagnostic');
     });
 
-    it('should emit an HMR error to new connections after a bundle failure', async function() {
+    it('should emit an HMR error to new connections after a bundle failure', async function () {
       let port = await getPort();
       let b = bundler(path.join(__dirname, '/input/index.js'), {
         hmrOptions: {port},
@@ -227,7 +245,7 @@ describe('hmr', function() {
       assert.equal(message.type, 'error');
     });
 
-    it('should emit an HMR update after error has been resolved', async function() {
+    it('should emit an HMR update after error has been resolved', async function () {
       let port = await getPort();
       let b = bundler(path.join(__dirname, '/input/index.js'), {
         hmrOptions: {port},
@@ -259,7 +277,7 @@ describe('hmr', function() {
       assert.equal(message.type, 'update');
     });
 
-    it('should make a secure connection', async function() {
+    it('should make a secure connection', async function () {
       let port = await getPort();
       let b = bundler(path.join(__dirname, '/input/index.js'), {
         serveOptions: {
@@ -289,7 +307,7 @@ describe('hmr', function() {
       assert.equal(message.type, 'update');
     });
 
-    it('should make a secure connection with custom certificate', async function() {
+    it('should make a secure connection with custom certificate', async function () {
       let port = await getPort();
       let b = bundler(path.join(__dirname, '/input/index.js'), {
         serveOptions: {
@@ -321,6 +339,301 @@ describe('hmr', function() {
 
       assert.equal(message.type, 'update');
     });
+
+    it('should respond to requests for assets by id', async function () {
+      let port = await getPort();
+      let b = bundler(path.join(__dirname, '/input/index.js'), {
+        serveOptions: {port},
+        hmrOptions: {port},
+        inputFS: overlayFS,
+        config,
+      });
+
+      subscription = await b.watch();
+      let event = await getNextBuild(b);
+
+      let bundleGraph = nullthrows(event.bundleGraph);
+      let asset = nullthrows(bundleGraph.getBundles()[0].getMainEntry());
+      let contents = await request('/__parcel_hmr/' + asset.id, port);
+      let publicId = nullthrows(bundleGraph).getAssetPublicId(asset);
+      assert(
+        contents.startsWith(
+          `parcelHotUpdate['${publicId}'] = function (require, module, exports) {`,
+        ),
+      );
+      assert(contents.includes('//# sourceMappingURL'));
+      assert(contents.includes('//# sourceURL'));
+    });
+
+    describe('source maps', function () {
+      let port, bundleGraph;
+      async function setup(publicUrl) {
+        port = await getPort();
+        let b = bundler(path.join(__dirname, '/input/index.js'), {
+          serveOptions: {port, publicUrl},
+          hmrOptions: {port},
+          inputFS: overlayFS,
+          config,
+        });
+
+        subscription = await b.watch();
+        let event = await getNextBuild(b);
+        bundleGraph = nullthrows(event.bundleGraph);
+      }
+
+      it('should return source maps by absolute bundle path', async function () {
+        await setup();
+        let qs = new URLSearchParams();
+        qs.set(
+          'filename',
+          normalizeSeparators(bundleGraph.getBundles()[0].filePath),
+        );
+        let contents = await request(
+          '/__parcel_source_map?' + qs.toString(),
+          port,
+        );
+        assert.equal(
+          contents,
+          await outputFS.readFile(
+            bundleGraph.getBundles()[0].filePath + '.map',
+            'utf8',
+          ),
+        );
+      });
+
+      it('should return source maps by relative bundle path', async function () {
+        await setup();
+        let qs = new URLSearchParams();
+        qs.set(
+          'filename',
+          normalizeSeparators(
+            path.relative(distDir, bundleGraph.getBundles()[0].filePath),
+          ),
+        );
+        let contents = await request(
+          '/__parcel_source_map?' + qs.toString(),
+          port,
+        );
+        assert.equal(
+          contents,
+          await outputFS.readFile(
+            bundleGraph.getBundles()[0].filePath + '.map',
+            'utf8',
+          ),
+        );
+      });
+
+      it('should return source maps by file url', async function () {
+        await setup();
+        let qs = new URLSearchParams();
+        qs.set(
+          'filename',
+          pathToFileURL(bundleGraph.getBundles()[0].filePath).toString(),
+        );
+        let contents = await request(
+          '/__parcel_source_map?' + qs.toString(),
+          port,
+        );
+        assert.equal(
+          contents,
+          await outputFS.readFile(
+            bundleGraph.getBundles()[0].filePath + '.map',
+            'utf8',
+          ),
+        );
+      });
+
+      it('should return source maps by fully qualified bundle URL', async function () {
+        await setup();
+        let qs = new URLSearchParams();
+        qs.set(
+          'filename',
+          'http://localhost:1234/' +
+            normalizeSeparators(
+              path.relative(distDir, bundleGraph.getBundles()[0].filePath),
+            ),
+        );
+        let contents = await request(
+          '/__parcel_source_map?' + qs.toString(),
+          port,
+        );
+        assert.equal(
+          contents,
+          await outputFS.readFile(
+            bundleGraph.getBundles()[0].filePath + '.map',
+            'utf8',
+          ),
+        );
+      });
+
+      it('should return source maps by with fully qualified public URL', async function () {
+        await setup('http://localhost:1234/static/');
+        let qs = new URLSearchParams();
+        qs.set(
+          'filename',
+          'http://localhost:1234/static/' +
+            normalizeSeparators(
+              path.relative(distDir, bundleGraph.getBundles()[0].filePath),
+            ),
+        );
+        let contents = await request(
+          '/__parcel_source_map?' + qs.toString(),
+          port,
+        );
+        assert.equal(
+          contents,
+          await outputFS.readFile(
+            bundleGraph.getBundles()[0].filePath + '.map',
+            'utf8',
+          ),
+        );
+      });
+
+      it('should return source maps by with relative public url', async function () {
+        await setup('/static');
+        let qs = new URLSearchParams();
+        qs.set(
+          'filename',
+          '/static/' +
+            normalizeSeparators(
+              path.relative(distDir, bundleGraph.getBundles()[0].filePath),
+            ),
+        );
+        let contents = await request(
+          '/__parcel_source_map?' + qs.toString(),
+          port,
+        );
+        assert.equal(
+          contents,
+          await outputFS.readFile(
+            bundleGraph.getBundles()[0].filePath + '.map',
+            'utf8',
+          ),
+        );
+      });
+
+      it('should return source maps by with RSC file URL', async function () {
+        await setup();
+        let qs = new URLSearchParams();
+        qs.set(
+          'filename',
+          'rsc://React/Server/' +
+            pathToFileURL(bundleGraph.getBundles()[0].filePath).toString(),
+        );
+        let contents = await request(
+          '/__parcel_source_map?' + qs.toString(),
+          port,
+        );
+        assert.equal(
+          contents,
+          await outputFS.readFile(
+            bundleGraph.getBundles()[0].filePath + '.map',
+            'utf8',
+          ),
+        );
+      });
+
+      it('should return source maps for an asset by id', async function () {
+        await setup();
+        let qs = new URLSearchParams();
+        qs.set(
+          'filename',
+          '/__parcel_hmr/' +
+            nullthrows(bundleGraph.getBundles()[0].getMainEntry()).id,
+        );
+        let contents = await request(
+          '/__parcel_source_map?' + qs.toString(),
+          port,
+        );
+        assert(contents.startsWith('{"mappings"'));
+      });
+
+      it('should return source maps for an asset by file path', async function () {
+        await setup();
+        let qs = new URLSearchParams();
+        qs.set(
+          'filename',
+          pathToFileURL(
+            nullthrows(bundleGraph.getBundles()[0].getMainEntry()).filePath,
+          ).toString(),
+        );
+        let contents = await request(
+          '/__parcel_source_map?' + qs.toString(),
+          port,
+        );
+        assert(contents.startsWith('{"mappings"'));
+      });
+    });
+
+    describe('code frame', function () {
+      let port, bundleGraph;
+      beforeEach(async function () {
+        port = await getPort();
+        let b = bundler(path.join(__dirname, '/input/index.js'), {
+          serveOptions: {port},
+          hmrOptions: {port},
+          inputFS: overlayFS,
+          config,
+        });
+
+        subscription = await b.watch();
+        let event = await getNextBuild(b);
+        bundleGraph = nullthrows(event.bundleGraph);
+      });
+
+      it('should return code frames for stack', async function () {
+        let map = new SourceMap('/');
+        map.addVLQMap(
+          JSON.parse(
+            await outputFS.readFile(
+              bundleGraph.getBundles()[0].filePath + '.map',
+              'utf8',
+            ),
+          ),
+        );
+        let source = map.getSourceIndex('input/index.js');
+        let mappings = map.getMappings();
+        let mapping = nullthrows(
+          mappings.find(m => m.source === source && m.original?.line === 6),
+        );
+
+        let res = await fetch(
+          'http://localhost:' + port + '/__parcel_code_frame',
+          {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+              contextLines: 3,
+              frames: [
+                {
+                  fileName: normalizeSeparators(
+                    bundleGraph.getBundles()[0].filePath,
+                  ),
+                  lineNumber: mapping.generated.line,
+                  columnNumber: mapping.generated.column,
+                },
+              ],
+            }),
+          },
+        );
+
+        let json = await res.json();
+        assert.deepEqual(json, [
+          {
+            fileName: '../dist/index.js',
+            lineNumber: mapping.generated.line,
+            columnNumber: mapping.generated.column,
+            sourceFileName: 'input/index.js',
+            sourceLineNumber: mapping.original?.line,
+            sourceColumnNumber: mapping.original?.column,
+            compiledLines: json[0].compiledLines,
+            sourceLines: json[0].sourceLines,
+          },
+        ]);
+      });
+    });
   });
 
   // TODO: add test for 4532 (`require` call in modified asset in child bundle where HMR runtime runs in parent bundle)
@@ -329,8 +642,8 @@ describe('hmr', function() {
       await outputFS.rimraf(path.join(__dirname, '/input'));
     });
 
-    it('should support self accepting', async function() {
-      let outputs = await testHMRClient('hmr-accept-self', outputs => {
+    it('should support self accepting', async function () {
+      let {outputs} = await testHMRClient('hmr-accept-self', outputs => {
         assert.deepStrictEqual(outputs, [
           ['other', 1],
           ['local', 1],
@@ -351,8 +664,8 @@ describe('hmr', function() {
       ]);
     });
 
-    it('should bubble through parents', async function() {
-      let outputs = await testHMRClient('hmr-bubble', outputs => {
+    it('should bubble through parents', async function () {
+      let {outputs} = await testHMRClient('hmr-bubble', outputs => {
         assert.deepStrictEqual(outputs, [
           ['other', 1],
           ['local', 1],
@@ -374,8 +687,8 @@ describe('hmr', function() {
       ]);
     });
 
-    it('should call dispose callbacks', async function() {
-      let outputs = await testHMRClient('hmr-dispose', outputs => {
+    it('should call dispose callbacks', async function () {
+      let {outputs} = await testHMRClient('hmr-dispose', outputs => {
         assert.deepStrictEqual(outputs, [
           ['eval:other', 1, null],
           ['eval:local', 1, null],
@@ -408,16 +721,16 @@ module.hot.dispose((data) => {
         ['eval:local', 1, null],
         ['eval:index', 1, null],
         ['dispose:other', 1],
-        ['eval:other', 3, {value: 1}],
         ['dispose:local', 1],
-        ['eval:local', 3, {value: 1}],
         ['dispose:index', 1],
+        ['eval:other', 3, {value: 1}],
+        ['eval:local', 3, {value: 1}],
         ['eval:index', 3, {value: 1}],
       ]);
     });
 
-    it('should work with circular dependencies', async function() {
-      let outputs = await testHMRClient('hmr-circular', outputs => {
+    it('should work with circular dependencies', async function () {
+      let {outputs} = await testHMRClient('hmr-circular', outputs => {
         assert.deepEqual(outputs, [3]);
 
         return {
@@ -427,6 +740,187 @@ module.hot.dispose((data) => {
       });
 
       assert.deepEqual(outputs, [3, 10]);
+    });
+
+    it('should reload if not accepted', async function () {
+      let {reloaded} = await testHMRClient('hmr-reload', outputs => {
+        assert.deepEqual(outputs, [3]);
+        return {
+          'local.js': 'exports.a = 5; exports.b = 5;',
+        };
+      });
+
+      assert(reloaded);
+    });
+
+    it('should reload when modifying the entry', async function () {
+      let {reloaded} = await testHMRClient('hmr-reload', outputs => {
+        assert.deepEqual(outputs, [3]);
+        return {
+          'index.js': 'output(5)',
+        };
+      });
+
+      assert(reloaded);
+    });
+
+    it('should work with multiple parents', async function () {
+      let {outputs} = await testHMRClient('hmr-multiple-parents', outputs => {
+        assert.deepEqual(outputs, ['a: fn1 b: fn2']);
+        return {
+          'fn2.js': 'export function fn2() { return "UPDATED"; }',
+        };
+      });
+
+      assert.deepEqual(outputs, ['a: fn1 b: fn2', 'a: fn1 b: UPDATED']);
+    });
+
+    it('should reload if only one parent accepts', async function () {
+      let {reloaded} = await testHMRClient(
+        'hmr-multiple-parents-reload',
+        outputs => {
+          assert.deepEqual(outputs, ['a: fn1', 'b: fn2']);
+          return {
+            'fn2.js': 'export function fn2() { return "UPDATED"; }',
+          };
+        },
+      );
+
+      assert(reloaded);
+    });
+
+    it('should work across bundles', async function () {
+      let {reloaded, outputs} = await testHMRClient('hmr-dynamic', outputs => {
+        assert.deepEqual(outputs, [3]);
+        return {
+          'local.js': 'exports.a = 5; exports.b = 5;',
+        };
+      });
+
+      assert.deepEqual(outputs, [3, 10]);
+      assert(!reloaded);
+    });
+
+    it('should work when an asset is duplicated', async function () {
+      let {reloaded, outputs} = await testHMRClient(
+        'hmr-duplicate',
+        outputs => {
+          assert.deepEqual(outputs, [7]);
+          return {
+            'shared.js': 'exports.a = 5;',
+          };
+        },
+      );
+
+      assert.deepEqual(outputs, [7, 13]);
+      assert(!reloaded);
+    });
+
+    it('should bubble to parents if child returns additional parents', async function () {
+      let {reloaded, outputs} = await testHMRClient('hmr-parents', outputs => {
+        assert.deepEqual(outputs, ['child 2', 'root']);
+        return {
+          'updated.js': 'exports.a = 3;',
+        };
+      });
+
+      assert.deepEqual(outputs, [
+        'child 2',
+        'root',
+        'child 3',
+        'accept child',
+        'root',
+        'accept root',
+      ]);
+      assert(!reloaded);
+    });
+
+    it('should bubble to parents and reload if they do not accept', async function () {
+      let {reloaded, outputs} = await testHMRClient(
+        'hmr-parents-reload',
+        outputs => {
+          assert.deepEqual(outputs, ['child 2', 'root']);
+          return {
+            'updated.js': 'exports.a = 3;',
+          };
+        },
+      );
+
+      assert.deepEqual(outputs, []);
+      assert(reloaded);
+    });
+
+    it('should work with urls', async function () {
+      let search;
+      let {outputs} = await testHMRClient('hmr-url', outputs => {
+        assert.equal(outputs.length, 1);
+        let url = new URL(outputs[0]);
+        assert(/test\.[0-9a-f]+\.txt/, url.pathname);
+        assert(!isNaN(url.search.slice(1)));
+        search = url.search;
+        return {
+          'test.txt': 'yo',
+        };
+      });
+
+      assert.equal(outputs.length, 2);
+      let url = new URL(outputs[1]);
+      assert(/test\.[0-9a-f]+\.txt/, url.pathname);
+      assert(!isNaN(url.search.slice(1)));
+      assert.notEqual(url.search, search);
+    });
+
+    it('should clean up orphaned assets when deleting a dependency', async function () {
+      let search;
+      let {outputs} = await testHMRClient('hmr-url', [
+        outputs => {
+          assert.equal(outputs.length, 1);
+          let url = new URL(outputs[0]);
+          assert(/test\.[0-9a-f]+\.txt/, url.pathname);
+          assert(!isNaN(url.search.slice(1)));
+          search = url.search;
+          return {
+            'index.js': 'output("yo"); module.hot.accept();',
+          };
+        },
+        outputs => {
+          assert.equal(outputs.length, 2);
+          assert.equal(outputs[1], 'yo');
+          return {
+            'index.js':
+              'output(new URL("test.txt", import.meta.url)); module.hot.accept();',
+          };
+        },
+      ]);
+
+      assert.equal(outputs.length, 3);
+      let url = new URL(outputs[2]);
+      assert(/test\.[0-9a-f]+\.txt/, url.pathname);
+      assert(!isNaN(url.search.slice(1)));
+      assert.notEqual(url.search, search);
+    });
+
+    it('should have correct source locations in errors', async function () {
+      let {outputs, bundleGraph} = await testHMRClient(
+        'hmr-accept-self',
+        () => {
+          return {
+            'local.js': 'output(new Error().stack);',
+          };
+        },
+      );
+
+      let asset = bundleGraph
+        .getBundles()[0]
+        .traverseAssets((asset, _, actions) => {
+          if (asset.filePath.endsWith('local.js')) {
+            actions.stop();
+            return asset;
+          }
+        });
+
+      let stack = outputs.pop();
+      assert(stack.includes('/__parcel_hmr/' + nullthrows(asset).id));
     });
 
     /*
@@ -528,90 +1022,6 @@ module.hot.dispose((data) => {
         10,
         'accept-' + moduleId,
       ]);
-    });
-
-    it.skip('should work across bundles', async function() {
-      await ncp(
-        path.join(__dirname, '/integration/hmr-dynamic'),
-        path.join(__dirname, '/input'),
-      );
-
-      let port = await getPort();
-      let b = await bundle(path.join(__dirname, '/input/index.js'), {
-        hmrOptions: {
-          https: false,
-          port,
-          host: 'localhost',
-        },
-        env: {
-          HMR_HOSTNAME: 'localhost',
-          HMR_PORT: port,
-        },
-        watch: true,
-      });
-
-      let outputs = [];
-
-      await run(b, {
-        output(o) {
-          outputs.push(o);
-        },
-      });
-
-      await sleep(50);
-      assert.deepEqual(outputs, [3]);
-
-      let ws = new WebSocket('ws://localhost:' + port);
-
-      await sleep(50);
-      fs.writeFile(
-        path.join(__dirname, '/input/local.js'),
-        'exports.a = 5; exports.b = 5;',
-      );
-
-      await nextWSMessage(ws);
-      await sleep(50);
-
-      assert.deepEqual(outputs, [3, 10]);
-    });
-
-    it.skip('should bubble up HMR events to a page reload', async function() {
-      await ncp(
-        path.join(__dirname, '/integration/hmr-reload'),
-        path.join(__dirname, '/input'),
-      );
-
-      let b = bundler(path.join(__dirname, '/input/index.js'), {
-        watch: true,
-        hmr: true,
-      });
-      let bundle = await b.bundle();
-
-      let outputs = [];
-      let ctx = await run(
-        bundle,
-        {
-          output(o) {
-            outputs.push(o);
-          },
-        },
-        {require: false},
-      );
-      let spy = sinon.spy(ctx.location, 'reload');
-
-      await sleep(50);
-      assert.deepEqual(outputs, [3]);
-      assert(spy.notCalled);
-
-      await sleep(100);
-      fs.writeFile(
-        path.join(__dirname, '/input/local.js'),
-        'exports.a = 5; exports.b = 5;',
-      );
-
-      // await nextEvent(b, 'bundled');
-      assert.deepEqual(outputs, [3]);
-      assert(spy.calledOnce);
     });
 
     it.skip('should trigger a page reload when a new bundle is created', async function() {
@@ -792,6 +1202,14 @@ module.hot.dispose((data) => {
       let bundleEvent = await getNextBuild(b);
       assert.equal(bundleEvent.type, 'buildSuccess');
 
+      // JSDOM doesn't support type=module
+      // https://github.com/jsdom/jsdom/issues/2475
+      let htmlPath = nullthrows(bundleEvent.bundleGraph).getBundles()[0]
+        .filePath;
+      let html = await outputFS.readFile(htmlPath, 'utf8');
+      html = html.replace(/type="module"/g, '');
+      await outputFS.writeFile(htmlPath, html);
+
       let window;
       try {
         let dom = await JSDOM.JSDOM.fromURL(
@@ -817,6 +1235,77 @@ module.hot.dispose((data) => {
         await overlayFS.copyFile(
           path.join(testDir, 'index.2.css'),
           path.join(testDir, 'index.css'),
+        );
+        assert.equal((await getNextBuild(b)).type, 'buildSuccess');
+        await sleep(200);
+
+        let newHref = _window.document.querySelector('link').href;
+
+        assert.notStrictEqual(initialHref, newHref);
+      } finally {
+        if (window) {
+          window.close();
+        }
+      }
+    });
+
+    it('should handle CSS Modules update correctly', async () => {
+      let testDir = path.join(__dirname, '/input');
+      await overlayFS.rimraf(testDir);
+      await overlayFS.mkdirp(testDir);
+      await ncp(path.join(__dirname, '/integration/hmr-css-modules'), testDir);
+
+      let port = await getPort();
+      let b = bundler(path.join(testDir, 'index.html'), {
+        inputFS: overlayFS,
+        outputFS: overlayFS,
+        serveOptions: {
+          https: false,
+          port,
+          host: '127.0.0.1',
+        },
+        hmrOptions: {port},
+        shouldContentHash: false,
+        config,
+      });
+
+      subscription = await b.watch();
+      let bundleEvent = await getNextBuild(b);
+      assert.equal(bundleEvent.type, 'buildSuccess');
+
+      // JSDOM doesn't support type=module
+      // https://github.com/jsdom/jsdom/issues/2475
+      let htmlPath = nullthrows(bundleEvent.bundleGraph).getBundles()[0]
+        .filePath;
+      let html = await outputFS.readFile(htmlPath, 'utf8');
+      html = html.replace(/type="module"/g, '');
+      await outputFS.writeFile(htmlPath, html);
+
+      let window;
+      try {
+        let dom = await JSDOM.JSDOM.fromURL(
+          'http://127.0.0.1:' + port + '/index.html',
+          {
+            runScripts: 'dangerously',
+            resources: 'usable',
+            pretendToBeVisual: true,
+          },
+        );
+        let _window = (window = dom.window); // For Flow
+        window.WebSocket = WebSocket;
+        await new Promise(res =>
+          dom.window.document.addEventListener('load', () => {
+            res();
+          }),
+        );
+        _window.console.clear = () => {};
+        _window.console.warn = () => {};
+
+        let initialHref = _window.document.querySelector('link').href;
+
+        await overlayFS.copyFile(
+          path.join(testDir, 'index2.module.css'),
+          path.join(testDir, 'index.module.css'),
         );
         assert.equal((await getNextBuild(b)).type, 'buildSuccess');
         await sleep(200);
