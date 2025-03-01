@@ -776,7 +776,7 @@ export default (new Transformer({
         sourceType: 'module',
         outputFormat: 'commonjs',
         engines: asset.env.engines,
-        includeNodeModules: false,
+        includeNodeModules: true,
         isLibrary: false,
         sourceMap: asset.env.sourceMap,
         shouldOptimize: asset.env.shouldOptimize,

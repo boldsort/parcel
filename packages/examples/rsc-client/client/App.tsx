@@ -1,5 +1,5 @@
 import {ReactElement, Suspense} from 'react';
-import {fetchRSC} from '@parcel/rsc/client';
+import {fetchRSC, setServerCallback} from '@parcel/rsc/client';
 
 export function App() {
   return (
@@ -19,3 +19,14 @@ function RSC() {
   request ??= fetchRSC('http://localhost:3001');
   return request;
 }
+
+setServerCallback(async (id, args) => {
+  let result = await fetchRSC('http://localhost:3001/action', {
+    method: 'POST',
+    headers: {
+      'rsc-action-id': id,
+    },
+    body: args,
+  });
+  return result;
+});

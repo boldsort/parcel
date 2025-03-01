@@ -1,8 +1,13 @@
 /* @jsxRuntime automatic */
-import { ReactNode, startTransition, useInsertionEffect } from 'react';
-import {createFromReadableStream, createFromFetch, encodeReply, setServerCallback, createTemporaryReferenceSet} from 'react-server-dom-parcel/client';
+import {ReactNode, startTransition, useInsertionEffect} from 'react';
+import {createFromReadableStream, createFromFetch, encodeReply, setServerCallback as setReactServerCallback, createTemporaryReferenceSet} from 'react-server-dom-parcel/client';
 import {rscStream} from 'rsc-html-stream/client';
-import { hydrateRoot, HydrationOptions, Root } from 'react-dom/client';
+import {hydrateRoot, HydrationOptions, Root} from 'react-dom/client';
+
+type CallServerCallback = <T>(id: string, args: any[]) => Promise<T>;
+export function setServerCallback(cb: CallServerCallback): void {
+  return setReactServerCallback(cb);
+}
 
 // Stream in initial RSC payload embedded in the HTML.
 let initialRSCPayload: Promise<ReactNode>;
