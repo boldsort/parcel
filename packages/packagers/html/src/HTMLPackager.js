@@ -218,7 +218,7 @@ function insertBundleReferences(bundleGraph, htmlBundle, tree) {
 
   if (useImportMap && Object.keys(importMap).length > 0) {
     for (let id in importMap) {
-      importMap[id] = urlJoin(htmlBundle.target.publicUrl, importMap[id]);
+      importMap[id] = urlJoin(htmlBundle.target.publicUrl, importMap[id], true);
     }
 
     // If there is an existing <script type="importmap">, merge with that.

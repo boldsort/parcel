@@ -3145,6 +3145,60 @@ describe('html', function () {
       assert.equal(value, 7);
     });
 
+    it('should generate an import map with relative public url', async function () {
+      await fsFixture(overlayFS, dir)`
+        index.html:
+          <body>
+            <script src="./main.js" type="module"></script>
+          </body>
+        main.js:
+          globalThis.output = async () => (await import('./main-async')).bar();
+        main-async.js:
+          import './main-async.css';
+          export const bar = async () => (await import('./nested-async')).bar + 3;
+        main-async.css:
+          .foo { color: red }
+        nested-async.js:
+          import './nested-async.css';
+          export const bar = 4;
+        nested-async.css:
+          .bar { color: green }
+        `;
+
+      let b = await bundle(path.join(dir, '/index.html'), {
+        inputFS: overlayFS,
+        mode: 'production',
+        defaultTargetOptions: {
+          publicUrl: '.',
+        },
+      });
+
+      let html = await overlayFS.readFile(b.getBundles()[0].filePath, 'utf8');
+      let importMap = JSON.parse(
+        html.match(/<script type="importmap">(.*?)<\/script>/)[1],
+      );
+      assert.deepEqual(importMap, {
+        imports: {
+          [b.getBundles()[2].publicId]:
+            './' + path.basename(b.getBundles()[2].filePath),
+          [b.getBundles()[3].publicId]:
+            './' + path.basename(b.getBundles()[3].filePath),
+          [b.getBundles()[4].publicId]:
+            './' + path.basename(b.getBundles()[4].filePath),
+          [b.getBundles()[5].publicId]:
+            './' + path.basename(b.getBundles()[5].filePath),
+        },
+      });
+
+      assert(
+        html.indexOf('<script type="importmap">') < html.indexOf('<script src'),
+      );
+
+      let res = await run(b, null, {require: false});
+      let value = await res.output();
+      assert.equal(value, 7);
+    });
+
     it('should merge with an existing import map', async function () {
       await fsFixture(overlayFS, dir)`
         index.html:
