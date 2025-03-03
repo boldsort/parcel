@@ -1510,6 +1510,22 @@ impl<'a> DependencyCollector<'a> {
         if let Some((name, span)) = name {
           match name.as_str() {
             "distDir" => {
+              if self.config.is_library {
+                return if self.config.is_esm_output {
+                  Some(Expr::Member(member_expr!(
+                    Default::default(),
+                    span,
+                    import.meta.distDir
+                  )))
+                } else {
+                  Some(Expr::Member(member_expr!(
+                    Default::default(),
+                    span,
+                    parcelRequire.meta.distDir
+                  )))
+                };
+              }
+
               self.helpers |= Helpers::DIST_DIR;
               if self.config.scope_hoist {
                 Some(Expr::Ident(Ident::new_no_ctxt(
@@ -1525,6 +1541,22 @@ impl<'a> DependencyCollector<'a> {
               }
             }
             "publicUrl" => {
+              if self.config.is_library {
+                return if self.config.is_esm_output {
+                  Some(Expr::Member(member_expr!(
+                    Default::default(),
+                    span,
+                    import.meta.publicUrl
+                  )))
+                } else {
+                  Some(Expr::Member(member_expr!(
+                    Default::default(),
+                    span,
+                    parcelRequire.meta.publicUrl
+                  )))
+                };
+              }
+
               self.helpers |= Helpers::PUBLIC_URL;
               if self.config.scope_hoist {
                 Some(Expr::Ident(Ident::new_no_ctxt(
@@ -1540,6 +1572,22 @@ impl<'a> DependencyCollector<'a> {
               }
             }
             "devServer" => {
+              if self.config.is_library {
+                return if self.config.is_esm_output {
+                  Some(Expr::Member(member_expr!(
+                    Default::default(),
+                    span,
+                    import.meta.devServer
+                  )))
+                } else {
+                  Some(Expr::Member(member_expr!(
+                    Default::default(),
+                    span,
+                    parcelRequire.meta.devServer
+                  )))
+                };
+              }
+
               self.helpers |= Helpers::DEV_SERVER;
               if self.config.scope_hoist {
                 Some(Expr::Ident(Ident::new_no_ctxt(
