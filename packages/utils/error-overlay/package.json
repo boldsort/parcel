@@ -27,8 +27,7 @@
   },
   "targets": {
     "module": {
-      "includeNodeModules": true,
-      "optimize": true
+      "includeNodeModules": true
     }
   }
 }
