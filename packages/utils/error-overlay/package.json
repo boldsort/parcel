@@ -22,6 +22,9 @@
     "ansi-html-community": "0.0.8",
     "preact": "^10.26.4"
   },
+  "alias": {
+    "preact/jsx-dev-runtime": "preact/jsx-runtime"
+  },
   "targets": {
     "module": {
       "includeNodeModules": true,
