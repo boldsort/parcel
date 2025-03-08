@@ -124,6 +124,7 @@ export default (new Packager({
 
     let meta = pageMeta(nullthrows(bundle.getMainEntry()).meta);
     let props: PageProps = {
+      key: 'page',
       pages,
       currentPage: {
         url: urlJoin(bundle.target.publicUrl, bundle.name),
@@ -141,6 +142,7 @@ export default (new Packager({
       if (b.type === 'css') {
         resources.push(
           React.createElement('link', {
+            key: b.id,
             rel: 'stylesheet',
             href: urlJoin(b.target.publicUrl, b.name),
             precedence: 'default',
@@ -150,6 +152,7 @@ export default (new Packager({
         bootstrapModules.push(urlJoin(b.target.publicUrl, b.name));
         resources.push(
           React.createElement('script', {
+            key: b.id,
             type: 'module',
             async: true,
             src: urlJoin(b.target.publicUrl, b.name),
